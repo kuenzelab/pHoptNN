@@ -1,0 +1,2 @@
+num_epochs,lr,activation_fn,dropout,optimizer_name,batch_size,loss_weighting,weight_decay,hidden_sizes_list,pooling,ks,sigma,weighting_factor,num_bins,Test_loss,MSE_test_loss
+100,0.0002779,<class 'torch.nn.modules.activation.Tanh'>,0.2,Adam,1,LDS_Yang,2.158e-06,"[117, 107]",set2set,3,7.938,0.905,7,0.00041049,1.28962276

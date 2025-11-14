@@ -1,0 +1,4 @@
+full_pos,full_aa,in_pdb,pdb_chain,pdb_resseq,pdb_icode,pdb_aa
+285,E,no,A,,,
+364,D,yes,A,364,,D
+392,E,yes,A,392,,E
