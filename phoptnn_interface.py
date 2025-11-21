@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 """
-phoptnn_interface.py — production wrapper for pHoptNN inference (silent-by-default PQR + clean forwarding)
+phoptnn_interface.py — production wrapper for pHoptNN inference
 
 Highlights
 - Accepts a single .pdb file or a directory of .pdb files.
 - Ensures PQR availability (pdb2pqr30 → pdb2pqr → ambpdb) and normalizes ATOM tokenization so your
-  legacy PQR parser in utils.extract_pqr_data() reads chain/resid reliably.
+  PQR parser in utils.extract_pqr_data() reads chain/resid reliably.
 - Forwards arguments to your predict.py (attention export, node aggregation, etc.) and can run quietly.
 
 Usage
@@ -22,10 +21,6 @@ Usage
       --train_csv_path pyg_datasets_connected/train/raw/train.csv \
       --y_mean 7.1956 --y_std 1.2302 \
       --att-export node --node-agg mean --charge-power 2
-
-Notes
-- This wrapper calls the *local* predict.py that matches your repo’s current implementation
-  (the one that writes predictions and *_attention.csv directly to --save_dir). See predict.py.  # noqa
 """
 
 from __future__ import annotations
@@ -38,8 +33,10 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Iterable, List, Optional
 
+import warnings
+warnings.filterwarnings("ignore")
 
-# ----------------------- small helpers -----------------------
+
 def which_any(candidates: Iterable[str]) -> Optional[str]:
     for name in candidates:
         p = shutil.which(name)
@@ -66,15 +63,15 @@ def ensure_pqr(pdb_path: Path, pqr_dir: Path, pdb2pqr_bin: Optional[str], ambpdb
         args = [pdb2pqr_bin, "--ff=AMBER", str(pdb_path), str(out_pqr)]
         subprocess.run(args,
                        check=True,
-                       stdout=(subprocess.DEVNULL if quiet else None),
-                       stderr=(subprocess.DEVNULL if quiet else None))
+                       stdout=(subprocess.DEVNULL),
+                       stderr=(subprocess.DEVNULL), close_fds=True)
         return out_pqr
 
     if ambpdb_bin:
         with open(pdb_path, "rb") as fin, open(out_pqr, "wb") as fout:
             subprocess.run([ambpdb_bin, "-pqr"],
                            stdin=fin, stdout=fout, check=True,
-                           stderr=(subprocess.DEVNULL if quiet else None))
+                           stderr=(subprocess.DEVNULL))
         return out_pqr
 
     raise RuntimeError("No PQR converter found: need pdb2pqr30/pdb2pqr or ambpdb in PATH.")
@@ -110,10 +107,9 @@ def normalize_pqr_inplace(pqr_path: Path) -> None:
                 tmp.write(line)
                 continue
             parts = line.strip().split()
-            # Expected after fix: ... resName  chain  resid  x y z charge ...
             need = False
             if len(parts) >= 6 and len(parts[4]) == 1 and parts[4].isalpha() and _looks_int(parts[5]):
-                pass  # already fine
+                pass  
             else:
                 if len(parts) > 4:
                     tok = parts[4]
@@ -129,7 +125,6 @@ def normalize_pqr_inplace(pqr_path: Path) -> None:
                             parts = parts[:4] + ["A"] + parts[4:]
                             need = True
                 else:
-                    # very malformed; insert a dummy chain
                     parts = parts + ["A", "1"]
                     need = True
             if need:
@@ -148,14 +143,12 @@ def normalize_pqr_inplace(pqr_path: Path) -> None:
 def resolve_weights(user_path: Optional[str]) -> Optional[str]:
     if user_path and Path(user_path).exists():
         return user_path
-    # small convenience fallbacks
     for cand in ("ATTbest_model_6/weight/Attention_model_6.pt",
                  "EGNN/weight/W_6_attn.pt",
                  "weight/W_6_attn.pt"):
         if Path(cand).exists():
             return cand
     return user_path
-# ---------------------------------------------------------------
 
 
 def main():
@@ -170,7 +163,6 @@ def main():
     ap.add_argument("--y_mean", type=float, default=7.1956)
     ap.add_argument("--y_std", type=float, default=1.2302)
 
-    # Forwarded options from your predict.py (attention export, etc.)
     ap.add_argument("--att-export", choices=["none", "edge", "node", "both"], default="node")
     ap.add_argument("--node-agg", choices=["sum", "mean"], default="mean")
     ap.add_argument("--charge-power", type=int, default=2)
@@ -183,14 +175,11 @@ def main():
     save_dir = Path(args.save_dir).resolve(); save_dir.mkdir(parents=True, exist_ok=True)
     pqr_dir = Path(args.pqr_dir).resolve(); pqr_dir.mkdir(parents=True, exist_ok=True)
 
-    # tools
     pdb2pqr_bin = which_any(["pdb2pqr30", "pdb2pqr"])
     ambpdb_bin = which_any(["ambpdb"])
 
-    # collect
     pdbs = collect_pdbs(input_path)
 
-    # precompute PQRs (silent errors by design if --quiet)
     for pdb in pdbs:
         try:
             pqr = ensure_pqr(pdb, pqr_dir, pdb2pqr_bin, ambpdb_bin, quiet=args.quiet)
@@ -199,7 +188,6 @@ def main():
             if not args.quiet:
                 print(f"[WARN] PQR build failed for {pdb.name}: {e}")
 
-    # call your predict.py (the one in this repo)
     predict_py = (root / "EGNN/predict.py").resolve()
     if not predict_py.exists():
         sys.exit(f"predict.py not found next to this script at: {predict_py}")
@@ -225,13 +213,11 @@ def main():
         cmd += ["--y_std", str(args.y_std)]
 
     env = os.environ.copy()
-    # Make sure local imports (e.g., models/, constants.py, etc.) are resolvable.
     extra_pp = f"{root}:{env.get('PYTHONPATH','')}"
     env["PYTHONPATH"] = extra_pp.strip(":")
 
     if args.quiet:
         subprocess.run(cmd, env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # print a single, friendly line so CI users still see success
         print(f"[OK] Predictions written to: {save_dir}")
     else:
         subprocess.run(cmd, env=env, check=True)
