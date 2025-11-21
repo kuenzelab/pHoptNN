@@ -33,7 +33,13 @@ conda activate pHoptNN
 python -m torch.utils.collect_env
 
 ```
-
+### Docker Support
+*NVIDIA Drivers: Make sure your GPU driver is installed. Docker: Install Docker Desktop (Windows) or Docker Engine (Linux). NVIDIA Toolkit: Windows: Included in Docker Desktop automatically. Linux: Run **sudo apt-get install nvidia-container-toolkit** . Open your terminal (or PowerShell) and navigate to the folder where you have the code. Run this command:*
+```bash
+# This downloads the env and opens a terminal inside it
+docker run --gpus all --privileged --rm -it -v $(pwd):/app rajarshisinharoy/phoptnn:v1
+```
+*Once inside: You will see a prompt like (pHoptNN) root@.... You can now run the scripts immediately. Happy Predictions*
 ---
 
 ### Usecase:
