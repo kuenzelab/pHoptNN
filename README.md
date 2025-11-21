@@ -40,7 +40,7 @@ python -m torch.utils.collect_env
  
 ## Use for Prediction:
 ```bash
-python phoptnn_interface.py /path/to/pdb_or_pdb folder
+python phoptnn_interface.py /path/to/pdb_or_pdb folder --save_dir /path/to/output_folder
 ```
 ---
 
