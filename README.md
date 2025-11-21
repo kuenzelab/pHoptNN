@@ -41,7 +41,9 @@ python -m torch.utils.collect_env
 docker run --gpus all --privileged --rm -it -v $(pwd):/app rajarshisinharoy/phoptnn:v1
 ```
 *Once inside: You will see a prompt like (pHoptNN) root@.... You can now run the scripts immediately. Happy Predictions*
-*if you get some errors in dockker installations then probably you need to restart your docker. 
+*if you get some errors in dockker installations then probably you need to restart your docker.*
+
+```bash
 # 1. Configure the production repository
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
   && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
@@ -56,7 +58,8 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 
 # 4. Restart Docker to apply changes
-sudo systemctl restart docker*
+sudo systemctl restart docker
+```
 ---
 
 ### Usecase:
