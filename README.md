@@ -54,7 +54,7 @@ python EGNN/create_pyg_dataset.py   --cif_dir /data/cif   --pqr_dir /data/pqr   
 python EGNN/train.py   --root_dir /data/phoptnn_dataset/train   --df_individuals hp_egnn_grid.csv   --idx_individual 0   --save_models_path runs/checkpoints
 
 # 3️⃣ Predict new structures
-python phoptnn_interface.py /path/to/pdb_or_pdb folder 
+python phoptnn_interface.py /path/to/pdb_or_pdb folder --save_dir /path/to/output_folder 
  or more advanced version is:
 python EGNN/predict.py   --input_path /data/new_pdbs --pqr_dir /data/pqr  --model_weights runs/checkpoints/model_0.pt   --train_csv_path /data/phoptnn_dataset/train/raw/train.csv   --save_dir pred_out
 ```
