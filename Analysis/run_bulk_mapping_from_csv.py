@@ -2,13 +2,7 @@
 """
 Bulk runner for map_active_sites_to_pdb.py over a CSV, including pdb_resseq in the master summary.
 
-Adds to the previous runner:
-- After each map_one run, it reads the produced <pdb>_<chain>_site_map.csv
-  and collects pdb_resseq values (for rows where in_pdb == "yes") and stores
-  them as a comma-separated list in the master summary under 'pdb_resseq_list'.
-- Also stores the full_pos list for clarity as 'requested_full_pos'.
-
-Usage (example):
+Usage :
   python run_bulk_mapping_from_csv_with_resseq.py \
     --csv mapping_ready.csv \
     --pdb-dir ./pdbs \
@@ -41,7 +35,7 @@ def load_mapper(mapper_path: str):
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot import from {mapper_path}")
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+    spec.loader.exec_module(mod) 
     if not hasattr(mod, "map_one"):
         raise AttributeError("map_active_sites_to_pdb.py missing function 'map_one'")
     return mod
@@ -72,12 +66,6 @@ def find_pdbs_for_id(pdb_dir: Path, acc: str, filename_template: Optional[str]) 
 
 
 def read_pdb_resseq_list(out_csv_path: Path) -> Dict[str, str]:
-    """
-    Read the per-PDB mapping CSV and return:
-      - requested_full_pos: comma-separated full_pos values in the file order
-      - pdb_resseq_list: comma-separated pdb_resseq for entries with in_pdb == 'yes'
-                         (empty entries for 'no' are skipped)
-    """
     req = []
     resseqs = []
     if not out_csv_path.exists():

@@ -1,5 +1,6 @@
 """
-additional_classes.py — Cleaned for public release
+===============================================================================
+additional_classes.py 
 
 - Provides EnzymeDatasetAACoarseGrain, a lightweight PyG Dataset that
   builds coarse‑grained amino‑acid graphs from mmCIF files.
@@ -25,12 +26,10 @@ Usage example
 The CSV at root/raw/<csv_filename> must contain at least the columns:
   - uniprot_id  (used to locate <cif_dir>/<uniprot_id>.cif)
   - ph_optimum  (target label)
+  
+AUTHOR = Raj
+===============================================================================
 
-Notes
------
-* No multiprocessing to keep things portable and deterministic.
-* Imports only project utilities found in utils.py.
-* Fully type hinted, PEP8-ish, and with clear error messages.
 """
 from __future__ import annotations
 
@@ -163,7 +162,7 @@ class EnzymeDatasetAACoarseGrain(Dataset):
 
             y = torch.tensor([r.ph_optimum], dtype=torch.float32)
             if self.norm_y:
-                y = (y - self.y_mean) / self.y_std  # type: ignore[arg-type]
+                y = (y - self.y_mean) / self.y_std  
 
             data = Data(x=x, edge_index=edge_index, y=y, uniprot_id=r.uniprot_id)
             torch.save(data, out_path)

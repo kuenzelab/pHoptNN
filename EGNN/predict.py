@@ -41,7 +41,7 @@ Example
         --pqr_dir ./pqr_files \
         --save_attention_path ./pred_out
 
-Author: Raj
+AUTHOR = Raj
 ===============================================================================
 """
 import os

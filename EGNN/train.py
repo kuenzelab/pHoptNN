@@ -30,6 +30,8 @@ Outputs
 - Optional: per-epoch loss CSV (`--losses_csv_path`).
 - Optional: best model checkpoint(s) (`--save_models_path`).
 
+AUTHOR = Raj
+===============================================================================
 """
 from __future__ import annotations
 
@@ -57,7 +59,6 @@ from qm9 import dataset
 from models.egnn import EGNN
 from utils_Yang_lds import get_lds_kernel_window, weighted_mse_loss
 
-# --------------------------- Repro & defaults ---------------------------
 SEED = 42
 torch.manual_seed(SEED)
 np.random.seed(SEED)
@@ -69,13 +70,11 @@ if torch.cuda.is_available():
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float32
 CHARGE_POWER = 2
-PROPERTY_COL = "ph_opti"  # internal normalized label key in EGNNBatchDataset dict
-SPLIT_FRACTION = 0.875     # single split: fraction for training
+PROPERTY_COL = "ph_opti"
+SPLIT_FRACTION = 0.875
 VAL_EVERY = 1
 NUM_WORKERS = max(0, min(6, (os.cpu_count() or 2) - 1))
-EDGE_DIM = 5               # edge feature size produced by create_pyg_dataset
-
-# ------------------------------ CLI ------------------------------------
+EDGE_DIM = 5
 
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Train one EGNN model (single split or K-Fold)")
@@ -98,8 +97,6 @@ def build_argparser() -> argparse.ArgumentParser:
                    help="Optional path to a log file. If omitted, logs are console-only.")
     return p
 
-# --------------------------- Logging utils -----------------------------
-
 def setup_logging(log_path: str | None) -> None:
     fmt = "%(asctime)s | %(levelname)s | %(message)s"
     datefmt = "%Y-%m-%d %H:%M:%S"
@@ -109,29 +106,19 @@ def setup_logging(log_path: str | None) -> None:
         handlers.append(logging.FileHandler(log_path, mode="a"))
     logging.basicConfig(level=logging.INFO, format=fmt, datefmt=datefmt, handlers=handlers)
 
-# --------------------------- Helpers -----------------------------------
-
 def config_from_csv_row(csv_path: str, idx: int) -> Dict:
     df = pd.read_csv(csv_path)
     row = df.iloc[idx].to_dict()
     return row
 
-
 def get_bin_idx(label_norm: float, *, num_bins: int, y_mean: float, y_std: float) -> int:
-    """Return discretization bin for a standardized label value."""
     lower = (0 - y_mean) / y_std
     upper = (14 - y_mean) / y_std
     bin_size = (upper - lower) / num_bins
     return int(np.clip((label_norm - lower) / bin_size, 0, num_bins - 1))
 
-# ----------------------- Train / Val steps -----------------------------
-
 def forward_one_batch(batch: Dict, *, model: nn.Module, charge_scale: torch.Tensor,
                       y_mean: torch.Tensor, y_std: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Forward a single pre-batched item from EGNNBatchDataset.
-
-    The dataset returns a dict of tensors for a full micro-batch.
-    """
     batch_size, n_nodes, _ = batch["positions"].size()
 
     positions = batch["positions"].view(batch_size * n_nodes, -1).to(DEVICE, DTYPE)
@@ -139,7 +126,6 @@ def forward_one_batch(batch: Dict, *, model: nn.Module, charge_scale: torch.Tens
     one_hot   = batch["one_hot"].to(DEVICE, DTYPE)
     charges   = batch["charges"].to(DEVICE, DTYPE)
 
-    # preprocessing must mirror training pipeline in qm9/utils
     nodes = qm9_utils.preprocess_input(one_hot, charges, CHARGE_POWER, charge_scale, DEVICE)
     nodes = nodes.view(batch_size * n_nodes, -1)
 
@@ -162,7 +148,6 @@ def forward_one_batch(batch: Dict, *, model: nn.Module, charge_scale: torch.Tens
     )
     return pred_norm.view(-1), y_norm.view(-1)
 
-
 def train_one_epoch(epoch: int, loader, *, model: nn.Module, optimizer: optim.Optimizer,
                     scaler: GradScaler, charge_scale: torch.Tensor,
                     y_mean: torch.Tensor, y_std: torch.Tensor,
@@ -176,7 +161,6 @@ def train_one_epoch(epoch: int, loader, *, model: nn.Module, optimizer: optim.Op
         with autocast():
             pred, y = forward_one_batch(batch, model=model, charge_scale=charge_scale,
                                          y_mean=y_mean, y_std=y_std)
-            # compute LDS weights per-sample
             bin_idx = torch.tensor([
                 get_bin_idx(v.item(), num_bins=num_bins, y_mean=y_mean.item(), y_std=y_std.item())
                 for v in y
@@ -188,7 +172,6 @@ def train_one_epoch(epoch: int, loader, *, model: nn.Module, optimizer: optim.Op
         scaler.update()
         running += float(loss.item())
     return running / max(1, len(loader))
-
 
 def validate(epoch: int, loader, *, model: nn.Module, charge_scale: torch.Tensor,
              y_mean: torch.Tensor, y_std: torch.Tensor,
@@ -215,17 +198,13 @@ def validate(epoch: int, loader, *, model: nn.Module, charge_scale: torch.Tensor
     n = max(1, len(loader))
     return loss_lds / n, loss_mse / n
 
-# ------------------------------- Main ----------------------------------
-
 def main() -> None:
     args = build_argparser().parse_args()
     setup_logging(args.log_path)
     logging.info("Starting training run")
 
-    # Load hyperparameters row
     cfg = config_from_csv_row(args.df_individuals, args.idx_individual)
 
-    # Label stats from training CSV (used for LDS binning & denorm for metrics)
     train_csv = os.path.join(args.root_dir, "raw", "train.csv")
     df_meta = pd.read_csv(train_csv)
     y_vals = df_meta["ph_optimum"].to_numpy(dtype=float)
@@ -233,24 +212,20 @@ def main() -> None:
     y_mean = torch.tensor(y_mean_val, dtype=DTYPE, device=DEVICE)
     y_std  = torch.tensor(y_std_val,  dtype=DTYPE, device=DEVICE)
 
-    # Charge scale from qm9 dataset utilities (kept for parity with training code)
     _, charge_scale_val = dataset.retrieve_dataloaders(batch_size=int(cfg.get("batch_size", 8)),
                                                        num_workers=NUM_WORKERS)
     charge_scale = torch.tensor(float(charge_scale_val), dtype=DTYPE, device=DEVICE)
 
-    # Load batched dataset
     pt_path = os.path.join(args.root_dir, f"egnn_train_dataset_bs_{int(cfg.get('batch_size', 8))}.pt")
     logging.info(f"Loading dataset: {pt_path}")
     big_ds = EGNNBatchDataset.load(pt_path)
 
-    # Infer node feature dimension from a sample
     sample_nodes = qm9_utils.preprocess_input(big_ds[0]["one_hot"].to(DEVICE),
                                               big_ds[0]["charges"].to(DEVICE),
                                               CHARGE_POWER, charge_scale, DEVICE)
     in_node_nf = int(sample_nodes.size(-1))
     logging.info(f"Detected node feature size: {in_node_nf}")
 
-    # Prepare LDS weights (or uniform)
     if str(cfg.get("loss_weighting", "none")).lower() == "lds_yang":
         num_bins = int(cfg.get("num_bins", 50))
         labels_norm = ((y_vals - y_mean_val) / (y_std_val + 1e-12)).tolist()
@@ -267,7 +242,6 @@ def main() -> None:
         num_bins = int(cfg.get("num_bins", 50))
         bin_weight = torch.ones(num_bins, dtype=DTYPE, device=DEVICE)
 
-    # Helper to build a fresh model
     def build_model(use_attention: bool) -> nn.Module:
         return EGNN(
             in_node_nf=in_node_nf,
@@ -279,7 +253,6 @@ def main() -> None:
             attention=bool(use_attention),
         ).to(DEVICE)
 
-    # ------------------------ K-Fold path ------------------------
     if args.kfold is not None and int(args.kfold) > 1:
         k = int(args.kfold)
         kfold = KFold(n_splits=k, shuffle=True, random_state=SEED)
@@ -327,7 +300,6 @@ def main() -> None:
 
             fold_summaries.append({"fold": fold + 1, "best_val_mse": best_val_mse})
 
-        # Summary & optional CSV
         df_summary = pd.DataFrame(fold_summaries)
         mean_mse = float(df_summary["best_val_mse"].mean())
         std_mse  = float(df_summary["best_val_mse"].std(ddof=0))
@@ -341,7 +313,6 @@ def main() -> None:
             logging.info("Saved CV summary to %s", out_csv)
         return
 
-    # ------------------------ Single-split path ------------------------
     n_train = int(len(big_ds) * SPLIT_FRACTION)
     n_val   = len(big_ds) - n_train
     train_ds, val_ds = random_split(big_ds, [n_train, n_val], generator=torch.Generator().manual_seed(SEED))
@@ -397,7 +368,6 @@ def main() -> None:
             "val_loss_MSE": val_mse_list,
         }).to_csv(out_csv, index=False)
         logging.info("Saved per-epoch losses to %s", out_csv)
-
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
+===============================================================================
 attention2pdb.py — Map EGNN attention scores onto PDB B-factors for visualization.
 
 Reads an attention CSV (from your predictor/attention export) and writes a copy of the
@@ -17,6 +17,9 @@ Exit codes:
     0 = success
     2 = CLI/argument errors
     3 = CSV/PDB parsing or mapping errors
+
+AUTHOR = Raj
+===============================================================================
 """
 from __future__ import annotations
 
@@ -30,28 +33,25 @@ import numpy as np
 import pandas as pd
 
 
-# --------------------------- PDB fixed-width helpers ---------------------------
-
 def _is_atom(rec: str) -> bool:
     return rec.startswith("ATOM  ") or rec.startswith("HETATM")
 
 
 @dataclass(frozen=True)
 class PDBAtom:
-    record: str     # 'ATOM  ' or 'HETATM'
-    serial: str     # cols 7–11 (as string; convert later if needed)
-    name: str       # cols 13–16
-    altloc: str     # col  17
-    resname: str    # cols 18–20
-    chain: str      # col  22
-    resid: str      # cols 23–26
-    icode: str      # col  27
-    occ: str        # cols 55–60
-    bfac: str       # cols 61–66
+    record: str
+    serial: str
+    name: str
+    altloc: str
+    resname: str
+    chain: str
+    resid: str
+    icode: str
+    occ: str
+    bfac: str
 
     @staticmethod
     def parse(line: str) -> "PDBAtom":
-        # PDB uses 1-based columns; here we slice 0-based [start:end)
         return PDBAtom(
             record=line[0:6],
             serial=line[6:11].strip(),
@@ -66,19 +66,16 @@ class PDBAtom:
         )
 
     def write_with_bfactor(self, line: str, new_b: float, *, force_occ_1: bool = True) -> str:
-        """Return a copy of the line with a new B-factor (cols 61–66)."""
         if not _is_atom(line):
             return line
         out = list(line)
         bf_str = f"{new_b:6.2f}"
         if force_occ_1:
             occ_str = f"{1.00:6.2f}"
-            out[54:60] = list(occ_str)  # occupancy
-        out[60:66] = list(bf_str)      # B-factor
+            out[54:60] = list(occ_str)
+        out[60:66] = list(bf_str)
         return "".join(out)
 
-
-# --------------------------- CSV utilities ---------------------------
 
 _SCORE_PREF_ORDER = [
     "attention_minmax01",
@@ -100,11 +97,9 @@ def _pick_score_column(df: pd.DataFrame, user_choice: str) -> str:
     cols_lower = [c.lower() for c in df.columns]
     if user_choice.lower() != "auto":
         if user_choice.lower() in cols_lower:
-            # Return the real column name (case preserved)
             return df.columns[cols_lower.index(user_choice.lower())]
         _die(3, f"--score_col '{user_choice}' not found. Available: {', '.join(df.columns)}")
 
-    # Try preferred names first, then any numeric 'att*' column, else any numeric column.
     pref = _find_col(df.rename(columns=str.lower), _SCORE_PREF_ORDER)
     if pref:
         return pref
@@ -125,8 +120,6 @@ def _scale_scores(values: np.ndarray, lo: float, hi: float) -> np.ndarray:
     z = (values - vmin) / (vmax - vmin)
     return lo + z * (hi - lo)
 
-
-# --------------------------- Mapping core ---------------------------
 
 def _build_serial_map(df: pd.DataFrame, serial_col: Optional[str]) -> Dict[int, float]:
     if not serial_col:
@@ -186,7 +179,7 @@ def _match_bfactor(
     mapped = 0
     out_lines: List[str] = []
 
-    chain_aware = any(len(k) == 4 for k in name_map.keys())  # (chain,res,resid,atom)
+    chain_aware = any(len(k) == 4 for k in name_map.keys())
     for line in lines:
         if not _is_atom(line):
             out_lines.append(line)
@@ -220,9 +213,7 @@ def _match_bfactor(
     return out_lines, mapped, total
 
 
-# --------------------------- CLI & main ---------------------------
-
-def _die(code: int, msg: str) -> "NoReturn":  # type: ignore[valid-type]
+def _die(code: int, msg: str) -> "NoReturn":
     print(f"ERROR: {msg}", file=sys.stderr)
     sys.exit(code)
 
@@ -263,12 +254,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.bf_max < args.bf_min:
         _die(2, "--bf_max must be ≥ --bf_min")
 
-    # 1) Load and normalize CSV columns
     df = pd.read_csv(args.attention_csv)
     if df.empty:
         _die(3, "Attention CSV is empty.")
 
-    # Soft-normalize header names (keep originals, but lookup via lowercase)
     df.columns = [c.strip() for c in df.columns]
     lower_map = {c.lower(): c for c in df.columns}
 
@@ -280,15 +269,12 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     score_col = _pick_score_column(df, args.score_col)
 
-    # 2) Scale selected score -> [bf_min, bf_max]
     scores = pd.to_numeric(df[score_col], errors="coerce").to_numpy()
     df["__bfactor__"] = _scale_scores(scores, args.bf_min, args.bf_max)
 
-    # 3) Optional residue aggregation (still per-atom write)
     if args.aggregate != "none" and col_rname and col_resid:
         df = _aggregate_residue(df, args.aggregate, col_rname, col_resid, col_chain)
 
-    # 4) Build lookup maps
     serial_map = _build_serial_map(df, col_serial)
     name_map   = _build_name_map(df, col_aname, col_rname, col_resid, col_chain)
 
@@ -300,7 +286,6 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.mode == "name" and not use_name:
         _die(3, "--mode name requested but CSV lacks (resname,resid,atom[,+chain]) columns.")
 
-    # 5) Read & write PDB
     with open(in_pdb, "r") as fh:
         lines = fh.readlines()
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
+===============================================================================
 create_pyg_dataset.py — Build PyTorch Geometric datasets from enzyme structures
--------------------------------------------------------------------------------
+===============================================================================
 
 • Reads training/test CSVs (with columns incl. `uniprot_id`, `ph_optimum`).
 • For each UniProt ID, loads a corresponding MMCIF (*.cif) and PQR (*.pqr).
@@ -19,6 +20,9 @@ Dependencies
 - RDKit (optional): only used for nicer edge features; safe fallback otherwise.
 - torch, torch_geometric, numpy, pandas, tqdm.
 
+
+AUTHOR = Raj
+===============================================================================
 """
 from __future__ import annotations
 
@@ -36,38 +40,29 @@ import torch
 from torch_geometric.data import Data, Dataset
 from tqdm import tqdm
 
-from Bio.PDB import MMCIFParser, PDBIO  # type: ignore
+from Bio.PDB import MMCIFParser, PDBIO
 
-# Project utilities
-from constants import ALL_ATOM_LABELS  # atom name vocabulary
+from constants import ALL_ATOM_LABELS
 from utils import (
-    compute_spherical_harmonics,  # optional SH node encoding
-    extract_pqr_data,             # parse PQR to atom list
-    build_edges_blockwise,        # build chemically sensible edges
+    compute_spherical_harmonics,
+    extract_pqr_data,
+    build_edges_blockwise,
 )
 
-# ---------------------------- Logging setup ----------------------------
 LOGGER = logging.getLogger("create_pyg_dataset")
 logging.basicConfig(
     level=logging.INFO,
     format="[%(levelname)s] %(message)s",
 )
 
-
-# ---------------------------- RDKit features ---------------------------
 try:
-    from rdkit import Chem  # type: ignore
+    from rdkit import Chem
     _HAS_RDKIT = True
 except Exception:
     _HAS_RDKIT = False
 
 
 def _distance_bin_feature(d: float) -> List[float]:
-    """4 distance bins + 1 ring flag placeholder (0.0) → 5-dim vector.
-
-    Bins are chosen to mirror training/prediction scripts:
-      [0–1.6), [1.6–3.0), [3.0–5.0), [5.0, ∞)
-    """
     if d < 1.6:
         bins = [1.0, 0.0, 0.0, 0.0]
     elif d < 3.0:
@@ -76,16 +71,10 @@ def _distance_bin_feature(d: float) -> List[float]:
         bins = [0.0, 0.0, 1.0, 0.0]
     else:
         bins = [0.0, 0.0, 0.0, 1.0]
-    return bins + [0.0]  # ring flag unknown in fallback
+    return bins + [0.0]
 
 
 def get_edge_features_from_rdkit(cif_file_path: str) -> Dict[Tuple[int, int], List[float]]:
-    """Extract 5‑dim edge features from MMCIF via RDKit.
-
-    Returns a mapping {(i,j): [one‑hot SINGLE, DOUBLE, TRIPLE, AROMATIC, in_ring]}
-    using 0‑based atom indices. If RDKit is unavailable or sanitization fails,
-    returns an empty dict (the caller should fall back to distance bins).
-    """
     if not _HAS_RDKIT:
         return {}
 
@@ -93,7 +82,6 @@ def get_edge_features_from_rdkit(cif_file_path: str) -> Dict[Tuple[int, int], Li
     temp_pdb_file: Optional[str] = None
 
     try:
-        # Convert CIF → PDB using Biopython (more robust for RDKit)
         with tempfile.NamedTemporaryFile(mode="w", suffix=".pdb", delete=False) as tmp:
             temp_pdb_file = tmp.name
 
@@ -104,7 +92,6 @@ def get_edge_features_from_rdkit(cif_file_path: str) -> Dict[Tuple[int, int], Li
         if mol is None:
             return {}
 
-        # Sanitize (can raise due to valence/formal charges)
         Chem.SanitizeMol(mol)
 
         bond_types = [
@@ -136,26 +123,14 @@ def get_edge_features_from_rdkit(cif_file_path: str) -> Dict[Tuple[int, int], Li
                 pass
 
 
-# ------------------------------ Datasets -------------------------------
 @dataclass
 class EnzymePaths:
-    """Bundle paths for a single enzyme (by UniProt)."""
     uniprot_id: str
     cif_path: str
     pqr_path: str
 
 
 class EnzymeDataset(Dataset):
-    """Per‑enzyme dataset producing a PyG `Data` object per UniProt ID.
-
-    Node features (default): [x,y,z] + charge + one‑hot(ALL_ATOM_LABELS)
-    Optional node encoding (when `l_max >= 0`): spherical harmonics Y_lm
-    replacing xyz (keeps charge + one‑hot).
-
-    Edge attributes (E×5): RDKit bond features when available; otherwise
-    4 distance bins + ring flag placeholder.
-    """
-
     def __init__(
         self,
         root: str,
@@ -183,7 +158,6 @@ class EnzymeDataset(Dataset):
         self.less_aa = bool(less_aa)
         super().__init__(root, transform, pre_transform)
 
-    # ---------------------- Required PyG properties ---------------------
     @property
     def raw_file_names(self) -> str:
         return self.filename
@@ -199,11 +173,9 @@ class EnzymeDataset(Dataset):
         prefix = "data_test_" if self.test else "data_"
         return [f"{prefix}{i}.pt" for i in self.data.index]
 
-    def download(self) -> None:  # noqa: D401 (PyG hook; no remote download used)
-        """No-op (files are local)."""
+    def download(self) -> None:
         return
 
-    # ---------------------------- Processing ---------------------------
     def process(self) -> None:
         self.data = pd.read_csv(self.raw_paths[0])
         desc = f"Processing {'Test' if self.test else 'Train'} Data"
@@ -213,11 +185,10 @@ class EnzymeDataset(Dataset):
             if os.path.exists(out_path):
                 continue
 
-            uniprot_id = str(row["uniprot_id"])  # expected in CSV
+            uniprot_id = str(row["uniprot_id"])
             cif_path = os.path.join(self.cif_dir, f"{uniprot_id}.cif")
             pqr_path = os.path.join(self.pqr_dir, f"{uniprot_id}.pqr")
 
-            # label
             y = torch.tensor([row["ph_optimum"]], dtype=torch.float32)
             if torch.isnan(y).any():
                 LOGGER.warning("Skipping %s: NaN label.", uniprot_id)
@@ -225,7 +196,6 @@ class EnzymeDataset(Dataset):
             if self.norm_y:
                 y = (y - self.y_mean) / (self.y_std + 1e-8)
 
-            # features
             data = self._build_data(cif_path, pqr_path, y)
             if data is None:
                 LOGGER.warning("Skipping %s: failed to build features.", uniprot_id)
@@ -233,12 +203,9 @@ class EnzymeDataset(Dataset):
 
             torch.save(data, out_path)
 
-    # --------------------------- Core builder --------------------------
     def _build_data(self, cif_path: str, pqr_path: str, y: torch.Tensor) -> Optional[Data]:
-        # Edge features (RDKit → optional)
         rdkit_edge_feats = get_edge_features_from_rdkit(cif_path)
 
-        # Atom entries from PQR (robust parser lives in utils.py)
         try:
             atom_entries = extract_pqr_data(pqr_path, less_aa=self.less_aa)
         except Exception as e:
@@ -247,7 +214,6 @@ class EnzymeDataset(Dataset):
         if not atom_entries:
             return None
 
-        # Build node tensors
         pos, labels, charges = [], [], []
         for a in atom_entries:
             pos.append([a["x"], a["y"], a["z"]])
@@ -263,9 +229,8 @@ class EnzymeDataset(Dataset):
         )
 
         if self.l_max >= 0:
-            # Replace xyz with spherical harmonics Y_lm (utils.compute_spherical_harmonics)
             try:
-                Y = compute_spherical_harmonics(self.l_max, pos_np)  # -> torch.Tensor [N, ?]
+                Y = compute_spherical_harmonics(self.l_max, pos_np)
                 Y_t = torch.tensor(np.asarray(Y), dtype=torch.float32)
                 x = torch.cat([Y_t, chg_t, one_hot], dim=1)
             except Exception as e:
@@ -274,8 +239,7 @@ class EnzymeDataset(Dataset):
         else:
             x = torch.cat([pos_t, chg_t, one_hot], dim=1)
 
-        # Edges and attributes
-        edge_index = build_edges_blockwise(atom_entries)  # [2, E]
+        edge_index = build_edges_blockwise(atom_entries)
 
         edge_attr_list: List[List[float]] = []
         for e in range(edge_index.size(1)):
@@ -290,26 +254,18 @@ class EnzymeDataset(Dataset):
 
         return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
 
-    # ------------------------------ PyG I/O -----------------------------
     def _get_labels(self, label: float) -> torch.Tensor:
         return torch.tensor([label], dtype=torch.float32)
 
-    def len(self) -> int:  # noqa: D401 (PyG API)
+    def len(self) -> int:
         return self.data.shape[0]
 
-    def get(self, idx: int) -> Data:  # noqa: D401 (PyG API)
+    def get(self, idx: int) -> Data:
         name = f"data_test_{idx}.pt" if self.test else f"data_{idx}.pt"
         return torch.load(os.path.join(self.processed_dir, name), weights_only=False)
 
 
 class EGNNBatchDataset(Dataset):
-    """Groups individual `Data` samples into fixed‑size EGNN mini‑batches.
-
-    The object stores a list of lists (chunks) of `Data`. Each `__getitem__`
-    returns a *padded* dictionary of tensors suitable for the training
-    code in this repository.
-    """
-
     def __init__(self, grouped_dataset: List[List[Data]], batch_size_egnn: int) -> None:
         self.grouped_dataset = grouped_dataset
         self.batch_size_egnn = int(batch_size_egnn)
@@ -366,7 +322,6 @@ class EGNNBatchDataset(Dataset):
             "edge_attr": eattr,
         }
 
-    # Simple serialization helpers for the batched container
     @staticmethod
     def save(path: str, dataset_obj: "EGNNBatchDataset") -> None:
         torch.save(dataset_obj, path)
@@ -376,12 +331,7 @@ class EGNNBatchDataset(Dataset):
         return torch.load(path)
 
 
-# --------------------------------- CLI ---------------------------------
-
 def _ensure_raw_layout(root_dir: str) -> Tuple[str, str]:
-    """Ensure train/test CSVs live in `<root>/train/raw` and `<root>/test/raw`.
-    Returns `(train_csv_path, test_csv_path)` within the raw subfolders.
-    """
     root_train = os.path.join(root_dir, "train")
     root_test  = os.path.join(root_dir, "test")
     os.makedirs(os.path.join(root_train, "raw"), exist_ok=True)
@@ -423,7 +373,6 @@ def main() -> None:
     y_std  = float(df_train["ph_optimum"].std(ddof=0))
     LOGGER.info("Using y_mean=%.4f, y_std=%.4f", y_mean, y_std)
 
-    # Build per‑sample datasets
     train_ds = EnzymeDataset(
         root=os.path.join(args.root_dir, "train"),
         filename="train.csv",
@@ -447,7 +396,6 @@ def main() -> None:
         l_max=args.l_max,
     )
 
-    # Group into fixed‑size batches for the EGNN training pipeline
     def _group(ds: EnzymeDataset, bs: int) -> List[List[Data]]:
         return [ds[i : i + bs] for i in range(0, len(ds), bs)]
 

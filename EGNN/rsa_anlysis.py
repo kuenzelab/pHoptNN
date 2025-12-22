@@ -1,26 +1,4 @@
 #!/usr/bin/env python3
-"""
-SASA_des.py — Attention vs Distance/SASA using NODE or EDGE attention, with Active-Site CSV
-===========================================================================================
-
-- Loads attention tables per protein:
-    * NODE attention:  *_attention.csv  (per atom)
-    * EDGE attention:  *_edge_attention.csv (per edge) → aggregated to per atom (mean/sum)
-- Uses Biopython to parse coordinates (robust; no reliance on FreeSASA coords API).
-- Uses FreeSASA to compute per-atom areas → collapsed to per-residue SASA. Computes RSA via Tien et al. maxima.
-- Computes per-residue attention (mean of per-atom attention), centroids, and min-distance to active site.
-- Active-site CSV must contain: 'uniprot_id' and 'fixed_positions_1based'. Positions can include ranges (e.g., "45-49").
-- If a protein has no active-site mapping and --require_active_site is not set, falls back to top-k% attention atoms as pocket.
-
-Outputs in --out_dir:
-  - per_residue_physical_input.csv
-  - binned_attention_vs_distance_angstrom.csv
-  - binned_attention_vs_sasa_A2.csv
-  - attention_structural_physical_bins.png
-  - percentile_attention_vs_distance.csv
-  - percentile_attention_vs_rsa.csv
-  - attention_percentile_panelC.png
-"""
 
 import os, re, glob, argparse
 from dataclasses import dataclass
@@ -33,7 +11,6 @@ import matplotlib.pyplot as plt
 import freesasa
 from Bio.PDB import PDBParser, Selection
 
-# -------------------------- Constants --------------------------
 MAX_ASA_TIEN = {
     "ALA": 129.0, "ARG": 274.0, "ASN": 195.0, "ASP": 193.0, "CYS": 167.0,
     "GLN": 225.0, "GLU": 223.0, "GLY": 104.0, "HIS": 224.0, "ILE": 197.0,
@@ -42,7 +19,6 @@ MAX_ASA_TIEN = {
     "UNK": 200.0
 }
 
-# -------------------------- Utilities --------------------------
 def normcol(s: str) -> str:
     return s.strip().lower().replace(" ", "_")
 
@@ -53,7 +29,6 @@ def norm_resname(resn: str) -> str:
     return table.get(resn, resn)
 
 def parse_range(s: str) -> np.ndarray:
-    # "start:step:end" or "x1,x2,..." → numpy array
     if ":" in s:
         a, b, c = s.split(":")
         a, b, c = float(a), float(b), float(c)
@@ -88,19 +63,11 @@ def pick_attention_column(df: pd.DataFrame,
     raise ValueError("No suitable attention column found in CSV.")
 
 def _numeric_resid(resid: str) -> Optional[int]:
-    """'123', '123A', ' 45B' → 123 (None if no leading int)."""
     if resid is None: return None
     m = re.match(r"\s*([+-]?\d+)", str(resid))
     return int(m.group(1)) if m else None
 
-# -------------------------- Active-site mapping --------------------------
 def load_active_site_map(csv_path: str) -> Dict[str, pd.DataFrame]:
-    """
-    Expect columns:
-      - 'uniprot_id'
-      - 'fixed_positions_1based' : e.g., "45, 87; 112-115  240"
-    Returns dict: protein_id -> DataFrame with 'resnum_list' (List[int]).
-    """
     def parse_positions(s: str) -> List[int]:
         if pd.isna(s): return []
         s = str(s)
@@ -117,7 +84,6 @@ def load_active_site_map(csv_path: str) -> Dict[str, pd.DataFrame]:
             else:
                 if tok.isdigit():
                     out.append(int(tok))
-        # unique preserving order
         seen = set(); uniq = []
         for x in out:
             if x not in seen:
@@ -138,32 +104,23 @@ def load_active_site_map(csv_path: str) -> Dict[str, pd.DataFrame]:
         out[str(pid)] = sub.reset_index(drop=True)
     return out
 
-# -------------------------- Data classes --------------------------
 @dataclass
 class AtomRec:
     chain: str
     residue_name: str
-    residue_id: str   # numeric as string (insertion codes are ignored in centroid step)
+    residue_id: str
     atom_label: str
     x: float
     y: float
     z: float
 
-# -------------------------- Biopython + FreeSASA core --------------------------
 def compute_sasa_rsa_and_coords(pdb_path: str):
-    """
-    Returns:
-      atoms_df: per-ATOM coords (chain,residue_name,residue_id,atom_label,x,y,z)
-      res_sasa_df: per-RESIDUE (residue_name,residue_id,chain,sasa_residue,rsa)
-      res_centroids_df: per-RESIDUE centroids (chain,residue_id,x,y,z)
-    Coordinates via Biopython; SASA via FreeSASA collapsed to residues.
-    """
     parser = PDBParser(QUIET=True)
     structure = parser.get_structure(os.path.basename(pdb_path).split(".")[0], pdb_path)
 
     atom_rows = []
-    res_to_coords = {}    # (chain,resid_num) -> [N x 3]
-    resname_map  = {}     # (chain,resid_num) -> 3-letter
+    res_to_coords = {}
+    resname_map  = {}
     for model in structure:
         for chain in model:
             ch = str(chain.id)
@@ -173,7 +130,7 @@ def compute_sasa_rsa_and_coords(pdb_path: str):
                         continue
                 except Exception:
                     pass
-                resid_num = int(residue.id[1])  # numeric part
+                resid_num = int(residue.id[1])
                 resn = norm_resname(residue.get_resname())
                 resname_map[(ch, resid_num)] = resn
                 coords = []
@@ -194,7 +151,6 @@ def compute_sasa_rsa_and_coords(pdb_path: str):
     if atoms_df.empty:
         return atoms_df, pd.DataFrame(), pd.DataFrame()
 
-    # FreeSASA residue SASA
     fs_struct = freesasa.Structure(str(pdb_path))
     fs_result = freesasa.calc(fs_struct)
 
@@ -233,16 +189,13 @@ def compute_sasa_rsa_and_coords(pdb_path: str):
     res_sasa_df = pd.DataFrame(rows)
     res_centroids_df = pd.DataFrame(cent_rows)
 
-    # Ensure residue_id string type
     for df in (atoms_df, res_sasa_df, res_centroids_df):
         if not df.empty and "residue_id" in df.columns:
             df["residue_id"] = df["residue_id"].astype(str)
 
     return atoms_df, res_sasa_df, res_centroids_df
 
-# -------------------------- Attention I/O --------------------------
 def load_node_attention(att_csv: str) -> pd.DataFrame:
-    """Return columns: residue_name,residue_id,atom_label, att_norm (baseline=1 per protein)."""
     df = pd.read_csv(att_csv)
     df.columns = [normcol(c) for c in df.columns]
     if "residue_id" in df.columns: df["residue_id"] = df["residue_id"].astype(str)
@@ -254,13 +207,6 @@ def load_node_attention(att_csv: str) -> pd.DataFrame:
     return df[["residue_name","residue_id","atom_label","att_norm"]].copy()
 
 def load_edge_attention_and_aggregate(att_csv: str, edge_agg: str = "mean") -> pd.DataFrame:
-    """
-    Load per-edge attention and aggregate to per-atom 'att_norm'.
-    Input must have:
-      src_residue_name/src_residue_id/src_atom_label
-      dst_residue_name/dst_residue_id/dst_atom_label
-      and 'attention_edge' (or any numeric '*att*' column).
-    """
     df = pd.read_csv(att_csv)
     df.columns = [normcol(c) for c in df.columns]
 
@@ -300,12 +246,7 @@ def load_edge_attention_and_aggregate(att_csv: str, edge_agg: str = "mean") -> p
     per_atom["att_norm"] = per_atom["att"] / mu
     return per_atom[["residue_name","residue_id","atom_label","att_norm"]].copy()
 
-# -------------------------- Merge & per-residue --------------------------
 def merge_attention_with_atoms(att_atom_df: pd.DataFrame, atoms_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Join attention (per-atom) with Biopython atom coords.
-    Keys: residue_name,residue_id,atom_label (chain ignored).
-    """
     A = atoms_df.copy()
     A.columns = [normcol(c) for c in A.columns]
     B = att_atom_df.copy()
@@ -314,17 +255,11 @@ def merge_attention_with_atoms(att_atom_df: pd.DataFrame, atoms_df: pd.DataFrame
     if "residue_id" in A.columns: A["residue_id"] = A["residue_id"].astype(str)
     keys = ["residue_name","residue_id","atom_label"]
     df = pd.merge(A, B, on=keys, how="inner")
-    return df  # chain,residue_name,residue_id,atom_label,x,y,z,att_norm
+    return df
 
 def per_residue_table(df_atom: pd.DataFrame,
                       res_sasa_df: pd.DataFrame,
                       res_centroids_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Per-residue table with:
-      - att_residue: mean(att_norm) over atoms with attention
-      - sasa_residue, rsa: from FreeSASA residue collapse
-      - x,y,z: residue centroid (Biopython)
-    """
     att_res = (df_atom.groupby(["residue_name","residue_id"], as_index=False)
                       .agg(att_residue=("att_norm","mean")))
     res_merge = pd.merge(att_res, res_sasa_df,
@@ -336,12 +271,7 @@ def per_residue_table(df_atom: pd.DataFrame,
             out[c] = pd.to_numeric(out[c], errors="coerce")
     return out
 
-# -------------------------- Active-site distance --------------------------
 def active_site_coords_for_protein(site_df: pd.DataFrame, atoms_df: pd.DataFrame) -> np.ndarray:
-    """
-    Return Nx3 coords for active-site atoms by matching numeric residue ids
-    from site_df['resnum_list'] to numeric part of atoms_df['residue_id'].
-    """
     if site_df is None or "resnum_list" not in site_df.columns or site_df["resnum_list"].empty:
         return np.empty((0,3), dtype=float)
 
@@ -362,11 +292,6 @@ def distance_to_active_or_fallback(df_res: pd.DataFrame,
                                    site_rows: Optional[pd.DataFrame],
                                    fallback_topk: float = 10.0,
                                    require_active: bool = False) -> Tuple[pd.DataFrame, bool]:
-    """
-    Min distance from residue centroids (x,y,z in df_res) to pocket atoms.
-    Pocket = active-site atoms if available; otherwise top-k% attention atoms (from df_atom_full if att_norm exists,
-    else use all atoms uniformly).
-    """
     pocket = None
     used_active = False
 
@@ -391,7 +316,6 @@ def distance_to_active_or_fallback(df_res: pd.DataFrame,
     out["dist_to_pocket"] = dmin
     return out, used_active
 
-# -------------------------- Curves & plots --------------------------
 def binned_curve(df: pd.DataFrame, xcol: str, attcol: str, bins: np.ndarray) -> pd.DataFrame:
     if "protein_id" not in df.columns:
         raise ValueError("df must contain 'protein_id'.")
@@ -434,11 +358,9 @@ def percentile_curve(df: pd.DataFrame, xcol: str, qbreaks: List[int], attcol: st
 def plot_physical(distance_df: pd.DataFrame, rsa_df: pd.DataFrame, out_png: str):
     fig, axes = plt.subplots(1, 2, figsize=(8.5, 3.6))
 
-    # Define colors
     dist_color = "tab:blue"
-    sasa_color = "tab:orange" # Variable name is fine, it's just for the color
+    sasa_color = "tab:orange"
 
-    # --- Plot 1: Distance (Blue) ---
     ax = axes[0]
     ax.plot(distance_df["x_center"], distance_df["mean"], linewidth=3, color=dist_color)
     ax.fill_between(distance_df["x_center"],
@@ -449,14 +371,13 @@ def plot_physical(distance_df: pd.DataFrame, rsa_df: pd.DataFrame, out_png: str)
     ax.set_ylabel("Attention (baseline = 1.0)")
     ax.tick_params(direction="out")
 
-    # --- Plot 2: RSA (Orange) ---
     ax = axes[1]
     ax.plot(rsa_df["x_center"], rsa_df["mean"], linewidth=3, color=sasa_color)
     ax.fill_between(rsa_df["x_center"],
                     rsa_df["mean"]-rsa_df["sem"],
                     rsa_df["mean"]+rsa_df["sem"], alpha=0.25, color=sasa_color)
     ax.axhline(1.0, ls="--", color="k", lw=1)
-    ax.set_xlabel("RSA")  # <-- CHANGED LABEL
+    ax.set_xlabel("RSA")
     ax.set_ylabel("Attention (baseline = 1.0)")
     ax.tick_params(direction="out")
 
@@ -488,8 +409,6 @@ def plot_panelC(dist_pct: pd.DataFrame, rsa_pct: pd.DataFrame, out_png: str):
     fig.savefig(out_png, dpi=300)
     plt.close(fig)
 
-# -------------------------- Main --------------------------
-# -------------------------- Main --------------------------
 def main():
     ap = argparse.ArgumentParser(description="SASA/Distance vs Attention (node or edge attention) with active-site CSV")
     ap.add_argument("--pdb_dir", required=True, help="Directory with PDB files.")
@@ -507,18 +426,15 @@ def main():
     ap.add_argument("--topk_percent_atoms", type=float, default=10.0,
                     help="Fallback top-k%% attention atoms used as pocket if active site is missing.")
     ap.add_argument("--dist_bins", default="0:2.5:10", help="Distance bins Å (start:step:end).")
-    # --- MODIFIED THIS ARGUMENT ---
     ap.add_argument("--rsa_bins", default="0:0.05:1.0", help="RSA bins (start:step:end).")
     ap.add_argument("--percentiles", default="0,20,40,60,80,100", help="Percentiles for panel-C.")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
     dist_bins = parse_range(args.dist_bins)
-    # --- MODIFIED THIS LINE ---
-    rsa_bins = parse_range(args.rsa_bins) # Was: sasa_bins
+    rsa_bins = parse_range(args.rsa_bins)
     qbreaks   = [int(x) for x in args.percentiles.split(",")]
 
-    # Choose attention files
     node_files = list_node_csv(args.att_dir)
     edge_files = list_edge_csv(args.att_dir)
     if args.att_level == "node":
@@ -527,14 +443,13 @@ def main():
     elif args.att_level == "edge":
         att_files = edge_files
         att_mode = "edge"
-    else:  # auto
+    else:
         att_files = node_files if node_files else edge_files
         att_mode = "node" if node_files else "edge"
 
     if not att_files:
         raise FileNotFoundError(f"No attention CSVs found in {args.att_dir} (mode={args.att_level}).")
 
-    # Active-site map
     site_map = load_active_site_map(args.active_csv)
 
     all_res_tables: List[pd.DataFrame] = []
@@ -551,7 +466,6 @@ def main():
                 continue
             pdb_path = cands[0]
 
-        # Load attention (node or edge → node)
         try:
             if att_mode == "node":
                 att_atom = load_node_attention(att_csv)
@@ -561,7 +475,6 @@ def main():
             print(f"[WARN] Attention load failed for {base}: {e}; skipping.")
             continue
 
-        # Biopython coords + FreeSASA residue SASA/RSA
         try:
             atoms_df, res_sasa_df, res_centroids_df = compute_sasa_rsa_and_coords(pdb_path)
         except Exception as e:
@@ -571,28 +484,23 @@ def main():
             print(f"[WARN] No atoms parsed for {base}; skipping.")
             continue
 
-        # Merge attention with atom coords
         df_atom = merge_attention_with_atoms(att_atom, atoms_df)
         if df_atom.empty:
             print(f"[WARN] No atom matches after merge for {base}; skipping.")
             continue
         df_atom["protein_id"] = base
 
-        # Per-residue aggregation (attention + SASA/RSA + centroids)
         df_res = per_residue_table(df_atom, res_sasa_df, res_centroids_df)
 
-        # Distances (active-site preferred; fallback to top-k% attention atoms)
-        # (Fix for DataFrame truth value)
         site_rows = site_map.get(base)
         if site_rows is None:
             site_rows = site_map.get(base.upper())
         if site_rows is None:
             site_rows = site_map.get(base.lower())
-            
-        # (Fix for KeyError: 'residue_id')
+
         df_res, used_active = distance_to_active_or_fallback(
             df_res,
-            df_atom.copy(),  # Pass the full df_atom
+            df_atom.copy(),
             site_rows,
             fallback_topk=args.topk_percent_atoms,
             require_active=args.require_active_site
@@ -612,20 +520,15 @@ def main():
 
     RES = pd.concat(all_res_tables, ignore_index=True)
 
-    # Save per-residue consolidated table
     per_residue_csv = os.path.join(args.out_dir, "per_residue_physical_input.csv")
     RES.to_csv(per_residue_csv, index=False)
 
-    # Physical-units curves
     dist_phys = binned_curve(RES, xcol="dist_to_pocket", attcol="att_residue", bins=dist_bins)
-    # --- MODIFIED THIS BLOCK ---
     rsa_phys = binned_curve(RES, xcol="rsa",  attcol="att_residue", bins=rsa_bins)
     dist_phys.to_csv(os.path.join(args.out_dir, "binned_attention_vs_distance_angstrom.csv"), index=False)
-    rsa_phys.to_csv(os.path.join(args.out_dir, "binned_attention_vs_rsa.csv"), index=False) # Changed filename
+    rsa_phys.to_csv(os.path.join(args.out_dir, "binned_attention_vs_rsa.csv"), index=False)
     plot_physical(dist_phys, rsa_phys, out_png=os.path.join(args.out_dir, "attention_structural_physical_bins.png"))
-    # --- END MODIFIED BLOCK ---
 
-    # Percentile (panel-C)
     dist_pct = percentile_curve(RES, xcol="dist_to_pocket", qbreaks=qbreaks, attcol="att_residue")
     rsa_pct  = percentile_curve(RES, xcol="rsa",            qbreaks=qbreaks, attcol="att_residue")
     dist_pct.to_csv(os.path.join(args.out_dir, "percentile_attention_vs_distance.csv"), index=False)
@@ -636,7 +539,6 @@ def main():
     print(f"Saved outputs in: {args.out_dir}")
     print(" - per_residue_physical_input.csv")
     print(" - binned_attention_vs_distance_angstrom.csv")
-    # --- MODIFIED THIS LINE ---
     print(" - binned_attention_vs_rsa.csv")
     print(" - attention_structural_physical_bins.png")
     print(" - percentile_attention_vs_distance.csv")
